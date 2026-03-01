@@ -1,0 +1,7 @@
+{
+  "name": "Remix: Remix: Remix: Copy of Copy of Copy of Amalix Ai",
+  "description": "A sophisticated AI assistant with a Gemini-inspired UI, smart balance system, and multi-language support.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
