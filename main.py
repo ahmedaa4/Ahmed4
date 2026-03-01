@@ -4,29 +4,34 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from supabase import create_client, Client
-from google import genai
 from dotenv import load_dotenv
 
-# طھط­ظ…ظٹظ„ ظ…طھط؛ظٹط±ط§طھ ط§ظ„ط¨ظٹط¦ط©
+# تحميل متغيرات البيئة
 load_dotenv()
 
 app = FastAPI(title="Clarity AI Backend")
 
-# ط¥ط¹ط¯ط§ط¯ ط§ظ„ط§طھطµط§ظ„ ط¨ظ‚ط§ط¹ط¯ط© ط§ظ„ط¨ظٹط§ظ†ط§طھ ظˆ Gemini
+# إعداد Supabase
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
     supabase = None
 
+# إعداد Gemini بأمان
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+ai_client = None
 if GEMINI_API_KEY:
-    ai_client = genai.Client(api_key=GEMINI_API_KEY)
-else:
-    ai_client = None
+    try:
+        from google import genai
+        ai_client = genai.Client(api_key=GEMINI_API_KEY)
+        print("Gemini initialized")
+    except Exception as e:
+        print("Gemini init failed:", e)
 
+# نماذج البيانات
 class ChatRequest(BaseModel):
     user_id: str
     question: str
@@ -38,19 +43,18 @@ class RegisterRequest(BaseModel):
     password: str
 
 # ==========================================
-# ظ†ظ‚ط·ط© ط§ظ„ظ†ظ‡ط§ظٹط© (Endpoint) ظ„ظ„طھط³ط¬ظٹظ„
+# تسجيل المستخدم
 # ==========================================
 @app.post("/register")
 async def register_user(request: RegisterRequest):
     if not supabase:
-        raise HTTPException(status_code=500, detail="ط¥ط¹ط¯ط§ط¯ط§طھ ظ‚ط§ط¹ط¯ط© ط§ظ„ط¨ظٹط§ظ†ط§طھ ط؛ظٹط± ظ…ظƒطھظ…ظ„ط©.")
+        raise HTTPException(status_code=500, detail="إعداد قاعدة البيانات غير مكتمل.")
         
     user_id = request.user_id
     email = request.email
     name = request.name
     password = request.password
     
-    # 1. ط¥ط¶ط§ظپط© ط¨ظٹط§ظ†ط§طھ ط§ظ„ظ…ط³طھط®ط¯ظ… ط¥ظ„ظ‰ ط¬ط¯ظˆظ„ users
     try:
         supabase.table("users").insert({
             "id": user_id,
@@ -59,9 +63,8 @@ async def register_user(request: RegisterRequest):
             "password": password
         }).execute()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"ط­ط¯ط« ط®ط·ط£ ط£ط«ظ†ط§ط، ط§ظ„طھط³ط¬ظٹظ„: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"حدث خطأ أثناء التسجيل: {str(e)}")
         
-    # 2. ط¥ظ†ط´ط§ط، ط³ط¬ظ„ ظپظٹ ط¬ط¯ظˆظ„ wallets ط¨ط±طµظٹط¯ 100 ظ†ظ‚ط·ط©
     try:
         supabase.table("wallets").insert({
             "user_id": user_id,
@@ -69,20 +72,18 @@ async def register_user(request: RegisterRequest):
             "last_refresh": datetime.now(timezone.utc).isoformat()
         }).execute()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"ط­ط¯ط« ط®ط·ط£ ط£ط«ظ†ط§ط، ط¥ظ†ط´ط§ط، ط§ظ„ظ…ط­ظپط¸ط©: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"حدث خطأ أثناء إنشاء المحفظة: {str(e)}")
         
-    return {"message": "طھظ… ط§ظ„طھط³ط¬ظٹظ„ ط¨ظ†ط¬ط§ط­ ظˆطھظ… ط¥ط¶ط§ظپط© 100 ظ†ظ‚ط·ط© ط¥ظ„ظ‰ ظ…ط­ظپط¸طھظƒ."}
+    return {"message": "تم التسجيل بنجاح وتم إضافة 100 نقطة إلى محفظتك."}
 
 # ==========================================
-# ط¯ط§ظ„ط© ظ…ط³ط§ط¹ط¯ط©: ط§ظ„طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ظˆظ‚طھ ظˆطھط­ط¯ظٹط« ط§ظ„ط±طµظٹط¯ طھط±ط§ظƒظ…ظٹط§ظ‹
+# تحديث الرصيد إذا لزم
 # ==========================================
 def refresh_wallet_if_needed(user_id: str):
     if not supabase:
-        raise HTTPException(status_code=500, detail="ط¥ط¹ط¯ط§ط¯ط§طھ ظ‚ط§ط¹ط¯ط© ط§ظ„ط¨ظٹط§ظ†ط§طھ ط؛ظٹط± ظ…ظƒطھظ…ظ„ط©.")
+        raise HTTPException(status_code=500, detail="إعداد قاعدة البيانات غير مكتمل.")
         
-    # ط¬ظ„ط¨ ط¨ظٹط§ظ†ط§طھ ظ…ط­ظپط¸ط© ط§ظ„ظ…ط³طھط®ط¯ظ… ظپظ‚ط· (ط®طµظˆطµظٹط©)
     response = supabase.table("wallets").select("balance, last_refresh").eq("user_id", user_id).execute()
-    
     if not response.data:
         return None
         
@@ -91,62 +92,47 @@ def refresh_wallet_if_needed(user_id: str):
     last_refresh_str = wallet.get("last_refresh")
     
     if last_refresh_str:
-        # طھط­ظˆظٹظ„ ط§ظ„ظ†طµ ط¥ظ„ظ‰ ظƒط§ط¦ظ† ظˆظ‚طھ (ظ…ط¹ط§ظ„ط¬ط© طµظٹط؛ط© Supabase)
         try:
             last_refresh = datetime.fromisoformat(last_refresh_str.replace('Z', '+00:00'))
         except ValueError:
             last_refresh = datetime.now(timezone.utc)
             
         now = datetime.now(timezone.utc)
-        
-        # ط­ط³ط§ط¨ ط§ظ„ط³ط§ط¹ط§طھ ط§ظ„طھظٹ ظ…ط±طھ
         hours = (now - last_refresh).total_seconds() / 3600
-        
-        # ظ…ظ†ط·ظ‚ ط§ظ„ط²ظٹط§ط¯ط© ط§ظ„طھط±ط§ظƒظ…ظٹط© ط¥ط°ط§ ظ…ط± 6 ط³ط§ط¹ط§طھ ط£ظˆ ط£ظƒط«ط±
         if hours >= 6:
             intervals = int(hours // 6)
             added_points = intervals * 100
             new_balance = balance + added_points
-            
-            # طھط­ط¯ظٹط« ط§ظ„ظˆظ‚طھ ظ„ظٹظƒظˆظ† ط¯ظ‚ظٹظ‚ط§ظ‹ ط¨ظ†ط§ط،ظ‹ ط¹ظ„ظ‰ ط§ظ„ظپطھط±ط§طھ ط§ظ„طھظٹ ظ…ط±طھ
             new_last_refresh = last_refresh + timedelta(hours=intervals * 6)
-            
-            # ط­ظپط¸ ط§ظ„طھط­ط¯ظٹط« ظپظٹ ظ‚ط§ط¹ط¯ط© ط§ظ„ط¨ظٹط§ظ†ط§طھ
             supabase.table("wallets").update({
                 "balance": new_balance,
                 "last_refresh": new_last_refresh.isoformat()
             }).eq("user_id", user_id).execute()
-            
             return new_balance
             
     return balance
 
 # ==========================================
-# ظ†ظ‚ط·ط© ط§ظ„ظ†ظ‡ط§ظٹط© (Endpoint) ظ„ط¥ط±ط³ط§ظ„ ط§ظ„ط³ط¤ط§ظ„
+# إرسال سؤال إلى Gemini
 # ==========================================
 @app.post("/ask")
 async def ask_gemini(request: ChatRequest):
     if not ai_client:
-        raise HTTPException(status_code=500, detail="ط¥ط¹ط¯ط§ط¯ط§طھ Gemini ط؛ظٹط± ظ…ظƒطھظ…ظ„ط©.")
+        raise HTTPException(status_code=500, detail="إعداد Gemini غير مكتمل.")
         
     user_id = request.user_id
     question = request.question
-
-    # 1. طھط­ط¯ظٹط« ط§ظ„ط±طµظٹط¯ طھظ„ظ‚ط§ط¦ظٹط§ظ‹ ط¥ط°ط§ ظ…ط± 6 ط³ط§ط¹ط§طھ ظˆط¬ظ„ط¨ ط§ظ„ط±طµظٹط¯ ط§ظ„ط­ط§ظ„ظٹ
     balance = refresh_wallet_if_needed(user_id)
     if balance is None:
-        raise HTTPException(status_code=404, detail="ظ„ظ… ظٹطھظ… ط§ظ„ط¹ط«ظˆط± ط¹ظ„ظ‰ ظ…ط­ظپط¸ط© ظ„ظ‡ط°ط§ ط§ظ„ظ…ط³طھط®ط¯ظ….")
+        raise HTTPException(status_code=404, detail="لم يتم العثور على محفظة لهذا المستخدم.")
         
-    # 2. ط§ظ„طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط±طµظٹط¯ (ظٹط¬ط¨ ط£ظ† ظٹظƒظˆظ† 20 ط£ظˆ ط£ظƒط«ط±)
     amount = 20
     if balance < amount:
-        return {"answer": "ط¹ط°ط±ط§ظ‹طŒ ط±طµظٹط¯ظƒ ط؛ظٹط± ظƒط§ظپظچ."}
+        return {"answer": "عذرًا، رصيدك غير كافٍ."}
         
-    # 3. ط®طµظ… 20 ظ†ظ‚ط·ط©
     new_balance = balance - amount
     supabase.table("wallets").update({"balance": new_balance}).eq("user_id", user_id).execute()
     
-    # 4. ط¥ط±ط³ط§ظ„ ط§ظ„ط³ط¤ط§ظ„ ظ„ظ€ Gemini
     try:
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
@@ -154,11 +140,9 @@ async def ask_gemini(request: ChatRequest):
         )
         answer = response.text
     except Exception as e:
-        # ط¥ط±ط¬ط§ط¹ ط§ظ„ط±طµظٹط¯ ظپظٹ ط­ط§ظ„ ظپط´ظ„ ط§ظ„ط°ظƒط§ط، ط§ظ„ط§طµط·ظ†ط§ط¹ظٹ
         supabase.table("wallets").update({"balance": balance}).eq("user_id", user_id).execute()
-        raise HTTPException(status_code=500, detail="ط­ط¯ط« ط®ط·ط£ ظپظٹ ظ…ط¹ط§ظ„ط¬ط© ط§ظ„ط·ظ„ط¨.")
-
-    # 5. ط­ظپط¸ ط§ظ„ظ…ط­ط§ط¯ط«ط© (ط®ط§طµط© ط¨ط§ظ„ظ…ط³طھط®ط¯ظ… ظپظ‚ط·)
+        raise HTTPException(status_code=500, detail="حدث خطأ في معالجة الطلب.")
+    
     supabase.table("chat_history").insert({
         "user_id": user_id,
         "question": question,
@@ -168,23 +152,21 @@ async def ask_gemini(request: ChatRequest):
     return {"answer": answer, "remaining_balance": new_balance}
 
 # ==========================================
-# طµظپط­ط© ط¹ط±ط¶ ط§ظ„ط¨ظٹط§ظ†ط§طھ (ط§ظ„ط±طµظٹط¯ ظˆط³ط¬ظ„ ط§ظ„ظ…ط­ط§ط¯ط«ط§طھ)
+# عرض لوحة التحكم
 # ==========================================
 @app.get("/dashboard/{user_id}", response_class=HTMLResponse)
 async def dashboard(user_id: str):
-    # طھط­ط¯ظٹط« ط§ظ„ط±طµظٹط¯ ظ‚ط¨ظ„ ط§ظ„ط¹ط±ط¶ ظ„ط¶ظ…ط§ظ† ط±ط¤ظٹط© ط£ط­ط¯ط« ط±طµظٹط¯
     balance = refresh_wallet_if_needed(user_id)
     if balance is None:
-        return HTMLResponse(content="<h3 style='text-align:center; color:red;'>ط§ظ„ظ…ط³طھط®ط¯ظ… ط؛ظٹط± ظ…ظˆط¬ظˆط¯</h3>", status_code=404)
+        return HTMLResponse(content="<h3 style='text-align:center; color:red;'>المستخدم غير موجود</h3>", status_code=404)
         
-    # ط¬ظ„ط¨ ط³ط¬ظ„ ط§ظ„ظ…ط­ط§ط¯ط«ط§طھ ط§ظ„ط®ط§طµ ط¨ظ‡ط°ط§ ط§ظ„ظ…ط³طھط®ط¯ظ… ظپظ‚ط· (ط¶ظ…ط§ظ† ط§ظ„ط®طµظˆطµظٹط©)
     history_response = supabase.table("chat_history").select("question, answer").eq("user_id", user_id).order("id", desc=True).execute()
     history = history_response.data
     
     html_content = f"""
     <html dir="rtl" lang="ar">
         <head>
-            <title>ظ„ظˆط­ط© طھط­ظƒظ… ط§ظ„ظ…ط³طھط®ط¯ظ…</title>
+            <title>لوحة تحكم المستخدم</title>
             <meta charset="utf-8">
             <style>
                 body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f9fafb; color: #111827; padding: 2rem; max-width: 800px; margin: auto; }}
@@ -197,21 +179,21 @@ async def dashboard(user_id: str):
         </head>
         <body>
             <div class="header-card">
-                <h2>ظ…ط±ط­ط¨ط§ظ‹ ط¨ظƒ ظپظٹ ظ„ظˆط­ط© ط§ظ„طھط­ظƒظ…</h2>
-                <p>ط±طµظٹط¯ظƒ ط§ظ„ط­ط§ظ„ظٹ: <span class="balance">{balance}</span> ظ†ظ‚ط·ط©</p>
-                <p style="font-size: 0.9rem; color: #6b7280;">ظٹطھظ… ط¥ط¶ط§ظپط© 100 ظ†ظ‚ط·ط© طھظ„ظ‚ط§ط¦ظٹط§ظ‹ ظƒظ„ 6 ط³ط§ط¹ط§طھ.</p>
+                <h2>مرحبًا بك في لوحة التحكم</h2>
+                <p>رصيدك الحالي: <span class="balance">{balance}</span> نقطة</p>
+                <p style="font-size: 0.9rem; color: #6b7280;">يتم إضافة 100 نقطة تلقائيًا كل 6 ساعات.</p>
             </div>
-            <h3 style="color: #374151;">ط³ط¬ظ„ ط§ظ„ظ…ط­ط§ط¯ط«ط§طھ ط§ظ„ط³ط§ط¨ظ‚ط©:</h3>
+            <h3 style="color: #374151;">سجل المحادثات السابقة:</h3>
     """
     
     if not history:
-        html_content += "<p style='text-align: center; color: #6b7280;'>ظ„ط§ ظٹظˆط¬ط¯ ط³ط¬ظ„ ظ…ط­ط§ط¯ط«ط§طھ ط­طھظ‰ ط§ظ„ط¢ظ†.</p>"
+        html_content += "<p style='text-align: center; color: #6b7280;'>لا يوجد سجل محادثات حتى الآن.</p>"
     else:
         for chat in history:
             html_content += f"""
             <div class="chat-card">
-                <div class="question">ط³: {chat['question']}</div>
-                <div class="answer">ط¬: {chat['answer']}</div>
+                <div class="question">س: {chat['question']}</div>
+                <div class="answer">ج: {chat['answer']}</div>
             </div>
             """
             
